@@ -1,4 +1,4 @@
-# Vibe — Angular Frontend
+# Angular Frontend
 
 Instagram-style UI for the Node backend (`/api/v1`).
 
