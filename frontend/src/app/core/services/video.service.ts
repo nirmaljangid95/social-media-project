@@ -27,8 +27,22 @@ export class VideoService {
   }
 
   getVideoById(videoId: string) {
-    return this.http.get<ApiResponse<Video>>(`${this.api}/v/${videoId}`);
+  let sessionId = sessionStorage.getItem('viewSessionId');
+
+  if (!sessionId) {
+    sessionId = crypto.randomUUID();
+    sessionStorage.setItem('viewSessionId', sessionId);
   }
+
+  return this.http.get<ApiResponse<Video>>(
+    `${this.api}/v/${videoId}`,
+    {
+      headers: {
+        'x-view-session-id': sessionId
+      }
+    }
+  );
+}
 
   publishVideo(formData: FormData) {
     return this.http.post<ApiResponse<Video>>(this.api, formData);

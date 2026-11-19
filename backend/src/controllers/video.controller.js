@@ -9,6 +9,7 @@ import { Video } from "../models/video.models.js";
 import { User } from "../models/user.models.js";
 import { Comment } from "../models/comment.model.js";
 import { Like } from "../models/likes.model.js";
+import { VideoView } from "../models/videoView.models.js";
 
 import {
     uplodeOnClodinary,
@@ -278,25 +279,182 @@ const publishAVideo = asyncHandler(async (req, res) => {
 });
 
 
+// const getVideoById = asyncHandler(async (req, res) => {
+//     const { videoId } = req.params;
+
+//     if (!isValidObjectId(videoId)) {
+//         throw new ApiError(400, "Invalid videoId");
+//     }
+
+//     if (!isValidObjectId(req.user?._id)) {
+//         throw new ApiError(401, "Invalid authenticated user");
+//     }
+
+//     const currentUserId = new mongoose.Types.ObjectId(
+//         req.user._id
+//     );
+
+//     const videos = await Video.aggregate([
+//         {
+//             $match: {
+//                 _id: new mongoose.Types.ObjectId(videoId),
+//             },
+//         },
+
+//         {
+//             $lookup: {
+//                 from: "likes",
+//                 localField: "_id",
+//                 foreignField: "video",
+//                 as: "likes",
+//             },
+//         },
+
+//         {
+//             $lookup: {
+//                 from: "users",
+//                 localField: "owner",
+//                 foreignField: "_id",
+//                 as: "ownerDetails",
+//                 pipeline: [
+//                     {
+//                         $lookup: {
+//                             from: "subscriptions",
+//                             localField: "_id",
+//                             foreignField: "channel",
+//                             as: "subscribers",
+//                         },
+//                     },
+//                     {
+//                         $addFields: {
+//                             subscribersCount: {
+//                                 $size: "$subscribers",
+//                             },
+//                             isSubscribed: {
+//                                 $in: [
+//                                     currentUserId,
+//                                     "$subscribers.subscriber",
+//                                 ],
+//                             },
+//                         },
+//                     },
+//                     {
+//                         $project: {
+//                             username: 1,
+//                             fullName: 1,
+//                             avatar: 1,
+//                             subscribersCount: 1,
+//                             isSubscribed: 1,
+//                         },
+//                     },
+//                 ],
+//             },
+//         },
+
+//         {
+//             $addFields: {
+//                 likesCount: { $size: "$likes" },
+
+//                 isLiked: {
+//                     $in: [
+//                         currentUserId,
+//                         "$likes.likedBy",
+//                     ],
+//                 },
+
+//                 owner: { $first: "$ownerDetails" },
+//             },
+//         },
+
+//         {
+//             $project: {
+//                 videoFile: "$videoFile.url",
+//                 thumbnail: "$thumbnail.url",
+//                 title: 1,
+//                 description: 1,
+//                 views: 1,
+//                 createdAt: 1,
+//                 duration: 1,
+//                 owner: 1,
+//                 likesCount: 1,
+//                 isLiked: 1,
+//                 isPublished: 1,
+//             },
+//         },
+//     ]);
+
+//     const video = videos[0];
+
+//     if (!video) {
+//         throw new ApiError(404, "Video not found");
+//     }
+
+
+//     const existingVideo = await Video.findById(videoId)
+//         .select("isPublished");
+
+//     if (existingVideo?.isPublished) {
+//         await Video.findByIdAndUpdate(videoId, {
+//             $inc: { views: 1 },
+//         });
+
+//         video.views += 1;
+//     }
+
+//     await User.findByIdAndUpdate(currentUserId, {
+//         $addToSet: {
+//             watchHistory: new mongoose.Types.ObjectId(videoId),
+//         },
+//     });
+
+//     return res.status(200).json(
+//         new ApiResponse(
+//             200,
+//             video,
+//             "Video details fetched successfully"
+//         )
+//     );
+// });
+
+
 const getVideoById = asyncHandler(async (req, res) => {
     const { videoId } = req.params;
 
+    // 1. Validate video ID
     if (!isValidObjectId(videoId)) {
         throw new ApiError(400, "Invalid videoId");
     }
 
+    // 2. Validate authenticated user
     if (!isValidObjectId(req.user?._id)) {
         throw new ApiError(401, "Invalid authenticated user");
+    }
+
+    // 3. Get viewing session ID from request header
+    const sessionId = req.get("x-view-session-id");
+
+    if (
+        !sessionId ||
+        typeof sessionId !== "string" ||
+        sessionId.length > 128 ||
+        !sessionId.trim()
+    ) {
+        throw new ApiError(400, "Valid viewing session ID is required");
     }
 
     const currentUserId = new mongoose.Types.ObjectId(
         req.user._id
     );
 
+    const currentVideoId = new mongoose.Types.ObjectId(
+        videoId
+    );
+
+    // 4. Fetch video details
     const videos = await Video.aggregate([
         {
             $match: {
-                _id: new mongoose.Types.ObjectId(videoId),
+                _id: currentVideoId,
             },
         },
 
@@ -329,6 +487,7 @@ const getVideoById = asyncHandler(async (req, res) => {
                             subscribersCount: {
                                 $size: "$subscribers",
                             },
+
                             isSubscribed: {
                                 $in: [
                                     currentUserId,
@@ -352,7 +511,9 @@ const getVideoById = asyncHandler(async (req, res) => {
 
         {
             $addFields: {
-                likesCount: { $size: "$likes" },
+                likesCount: {
+                    $size: "$likes",
+                },
 
                 isLiked: {
                     $in: [
@@ -361,7 +522,9 @@ const getVideoById = asyncHandler(async (req, res) => {
                     ],
                 },
 
-                owner: { $first: "$ownerDetails" },
+                owner: {
+                    $first: "$ownerDetails",
+                },
             },
         },
 
@@ -388,24 +551,81 @@ const getVideoById = asyncHandler(async (req, res) => {
         throw new ApiError(404, "Video not found");
     }
 
+    // 5. Count view only for published videos
+    if (video.isPublished) {
+        let isNewView = false;
 
-    const existingVideo = await Video.findById(videoId)
-        .select("isPublished");
+        try {
+            // Create a unique view record
+            await VideoView.create({
+                video: currentVideoId,
+                viewer: currentUserId,
+                sessionId: sessionId.trim(),
+            });
 
-    if (existingVideo?.isPublished) {
-        await Video.findByIdAndUpdate(videoId, {
-            $inc: { views: 1 },
-        });
+            isNewView = true;
 
-        video.views += 1;
+        } catch (error) {
+
+            // Duplicate view means already counted
+            if (error.code !== 11000) {
+                throw error;
+            }
+        }
+
+        // 6. Increment views only for a new view
+        if (isNewView) {
+            try {
+                const result = await Video.updateOne(
+                    {
+                        _id: currentVideoId,
+                        isPublished: true,
+                    },
+                    {
+                        $inc: {
+                            views: 1,
+                        },
+                    }
+                );
+
+                // If video was unpublished or deleted
+                // before incrementing, remove the view record
+                if (result.matchedCount === 0) {
+                    await VideoView.deleteOne({
+                        video: currentVideoId,
+                        viewer: currentUserId,
+                        sessionId: sessionId.trim(),
+                    });
+
+                } else {
+                    video.views += 1;
+                }
+
+            } catch (error) {
+
+                // Roll back the view record if increment fails
+                await VideoView.deleteOne({
+                    video: currentVideoId,
+                    viewer: currentUserId,
+                    sessionId: sessionId.trim(),
+                });
+
+                throw error;
+            }
+        }
     }
 
-    await User.findByIdAndUpdate(currentUserId, {
-        $addToSet: {
-            watchHistory: new mongoose.Types.ObjectId(videoId),
-        },
-    });
+    // 7. Update watch history
+    await User.findByIdAndUpdate(
+        currentUserId,
+        {
+            $addToSet: {
+                watchHistory: currentVideoId,
+            },
+        }
+    );
 
+    // 8. Return video details
     return res.status(200).json(
         new ApiResponse(
             200,
@@ -414,6 +634,8 @@ const getVideoById = asyncHandler(async (req, res) => {
         )
     );
 });
+
+
 
 const updateVideo = asyncHandler(async (req, res) => {
     const { videoId } = req.params;

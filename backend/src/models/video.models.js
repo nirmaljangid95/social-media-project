@@ -8,31 +8,39 @@ const videoSchema = new Schema(
             url: { type: String, required: true },
             public_id: { type: String, required: true },
         },
+
         thumbnail: {
             url: { type: String, required: true },
             public_id: { type: String, required: true },
         },
+
         title: {
             type: String,
             required: true,
             trim: true,
         },
+
         description: {
             type: String,
             required: true,
         },
+
         duration: {
             type: Number,
             required: true,
         },
+
         views: {
             type: Number,
             default: 0,
+            min: 0,
         },
+
         isPublished: {
             type: Boolean,
             default: false,
         },
+
         owner: {
             type: Schema.Types.ObjectId,
             ref: "User",
